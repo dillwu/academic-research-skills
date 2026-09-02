@@ -1,0 +1,56 @@
+name: Repository Activity Check (Monthly)
+
+# Monthly check for repository activity. If there have been no commits to
+# main in the last 30 days, opens a tracking issue labeled `repo-activity`
+# so stagnation gets noticed instead of going silent.
+
+on:
+  schedule:
+    # 07:00 UTC on the 1st = 15:00 Asia/Taipei (offset 1h from
+    # harness-retirement-monthly.yml to avoid runner contention)
+    - cron: '0 7 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-activity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Count commits in the last 30 days
+        id: activity
+        run: |
+          set -euo pipefail
+          COUNT=$(git log --since="30 days ago" --oneline | wc -l | tr -d ' ')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "Commits in the last 30 days: $COUNT"
+
+      - name: Check for an existing open alert
+        if: steps.activity.outputs.count == '0'
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          OPEN=$(gh issue list --label repo-activity --state open --json number --jq 'length')
+          echo "open=$OPEN" >> "$GITHUB_OUTPUT"
+
+      - name: Open inactivity alert issue
+        if: steps.activity.outputs.count == '0' && steps.existing.outputs.open == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh issue create \
+            --title "No commits in the last 30 days ($(date -u +%Y-%m))" \
+            --label "repo-activity" \
+            --body "No commits landed on \`main\` in the last 30 days. Close this once you've confirmed the project is intentionally paused — a new issue only opens if activity resumes and then goes cold again."
